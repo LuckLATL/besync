@@ -70,7 +70,7 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
                     FilePath = targetPath,
                     AudioTracks = originalTrackMediaInfo.AudioStreams.Select(x => new AudioTrack()
                     {
-                        FilePath = inputPath,
+                        FilePath = targetPath,
                         Index = x.Index,
                         Language = Language.LookupCode(x.Language),
                     }).ToList()
@@ -115,7 +115,6 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
         AnsiConsole.Clear();
 
         int averageOffset = await PerformAutoMatching(targetPath, inputPath);
-        averageOffset = 1000;
         
         string answer = AnsiConsole.Prompt(new TextPrompt<string>("Do you wish to continue?").AddChoices(["y", "n"]).DefaultValue("y"));
         if (answer == "n")
@@ -130,37 +129,54 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
                     .OutputToFile(outputPath, overwrite: true, options =>
                     {
                         options.WithVideoCodec("copy"); // Copy the video stream
-                        options.WithAudioCodec("aac"); // Encode the audio stream
+                        options.WithAudioCodec("aac");  // Encode the audio stream
                         options.WithCustomArgument("-map 0:v:0"); // Map video from the first input
-                        string channelOffsets = string.Empty;
-                        foreach (var stream in selectedAudioTracks.Where(x => originalVideoFile.AudioTracks.Contains(x)))
+
+                        int originalAudioTrackCount = selectedAudioTracks.Count(x => originalVideoFile.AudioTracks.Contains(x));
+                        string filterComplex = ""; // Initialize filter complex for delay
+                        int filterIndex = 0; // Index for filter outputs
+                        int metadataIndex = 0; // Index for metadata adjustment
+
+                        foreach (var stream in selectedAudioTracks)
                         {
                             var track = stream as AudioTrack;
-                            int audioStreamIndex = additionalTrackMediaInfo.AudioStreams.IndexOf(additionalTrackMediaInfo.AudioStreams.FirstOrDefault(x => x.Index == track.Index));
-                            options.WithCustomArgument($"-map 0:a:{audioStreamIndex}"); // Map audio from the first input if it exists
+                            int audioStreamIndex = -1;
 
-                            if (channelOffsets != string.Empty)
-                                channelOffsets += "|";
-                            channelOffsets += "0";
+                            if (originalVideoFile.AudioTracks.Contains(stream))
+                            {
+                                // Map original audio tracks directly
+                                audioStreamIndex = originalTrackMediaInfo.AudioStreams.IndexOf(originalTrackMediaInfo.AudioStreams.FirstOrDefault(x => x.Index == track.Index));
+                                options.WithCustomArgument($"-map 0:a:{audioStreamIndex}");
+                            }
+                            else
+                            {
+                                // Map non-original tracks and add delay
+                                audioStreamIndex = additionalTrackMediaInfo.AudioStreams.IndexOf(additionalTrackMediaInfo.AudioStreams.FirstOrDefault(x => x.Index == track.Index));
+                                // Apply delay to non-original audio tracks
+                                if (!string.IsNullOrEmpty(filterComplex))
+                                {
+                                    filterComplex += ";";
+                                }
+                                // Add delay filter for each non-original track
+                                filterComplex += $"[1:a:{audioStreamIndex}]adelay={averageOffset}|{averageOffset}[a{filterIndex}]";
+                                options.WithCustomArgument($"-map [a{filterIndex}]"); // Map the delayed track
+                                filterIndex++;
+                                metadataIndex++;
+                            }
+
+                            // Set metadata for all tracks
+                            options.WithCustomArgument($"-metadata:s:a:{audioStreamIndex + originalAudioTrackCount} language={track.Language.LanguageCodeLong}");
+                            options.WithCustomArgument($"-metadata:s:a:{audioStreamIndex + originalAudioTrackCount} title=\"{track.Title}\"");
                         }
-                        
-                        foreach (var stream in selectedAudioTracks.Where(x => !originalVideoFile.AudioTracks.Contains(x)))
+
+                        // Apply the filter complex if there are any delays to apply
+                        if (!string.IsNullOrEmpty(filterComplex))
                         {
-                            var track = stream as AudioTrack;
-                            int audioStreamIndex = additionalTrackMediaInfo.AudioStreams.IndexOf(additionalTrackMediaInfo.AudioStreams.FirstOrDefault(x => x.Index == track.Index));
-                            int originalAudioTrackCount = selectedAudioTracks.Count(x => originalVideoFile.AudioTracks.Contains(x));
-                            options.WithCustomArgument($"-map 1:a:{audioStreamIndex}"); // Map selected audio track
-                            options.WithCustomArgument($"-metadata:s:{audioStreamIndex+1 + originalAudioTrackCount} language={track.Language.LanguageCodeLong}"); // Set the language metadata
-                            options.WithCustomArgument($"-metadata:s:{audioStreamIndex+1 + originalAudioTrackCount} title=\"{track.Title}\""); // Set the language metadata
-                            
-                            if (channelOffsets != string.Empty)
-                                channelOffsets += "|";
-                            channelOffsets += averageOffset;
+                            options.WithCustomArgument($"-filter_complex \"{filterComplex}\"");
                         }
 
-                        // options.WithCustomArgument("-map 1:a:0"); // Map audio from the second input
-                        // options.WithCustomArgument("-ar 44100");  // Resample both audio tracks to 44.1 kHz
-                        // options.WithCustomArgument("-shortest"); // Ensure the output duration matches the shortest input
+                        // Ensure the output duration matches the shortest input
+                        options.WithCustomArgument("-shortest");
                     })
                     .ProcessAsynchronously();
                 
