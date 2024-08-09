@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BeSync", "BeSync\BeSync.csproj", "{9C19C271-060C-4EA0-9DDD-645F1EE24CF4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BeSync.Tests", "BeSync.Tests\BeSync.Tests.csproj", "{6E7E255A-359B-48D5-9D1D-688C2787735E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9C19C271-060C-4EA0-9DDD-645F1EE24CF4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C19C271-060C-4EA0-9DDD-645F1EE24CF4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C19C271-060C-4EA0-9DDD-645F1EE24CF4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C19C271-060C-4EA0-9DDD-645F1EE24CF4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E7E255A-359B-48D5-9D1D-688C2787735E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E7E255A-359B-48D5-9D1D-688C2787735E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E7E255A-359B-48D5-9D1D-688C2787735E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E7E255A-359B-48D5-9D1D-688C2787735E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
