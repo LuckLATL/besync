@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
 using BeSync.Extensions;
 using BeSync.Models;
 using BeSync.Models.Console;
+using BeSync.VideoMatching;
 using CoenM.ImageHash;
 using CoenM.ImageHash.HashAlgorithms;
 using FFMpegCore;
@@ -17,15 +20,15 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
     {
         [CommandOption("-a| --audio-file")]
         [Description("Audio or video file used for input")]
-        public string? InputPath { get; init; }
+        public string? InputPath { get; init; } = "/home/void/Desktop/videotest/combat/S01E01.mp4";
 
         [CommandOption("-v| --video-file")]
         [Description("File used for as video")]
-        public string? TargetPath { get; init; }
+        public string? TargetPath { get; init; } = "/home/void/Desktop/videotest/combat/1.mp4";
 
         [CommandOption("-o| --output")]
         [Description("File used to output the video")]
-        public string? OutputPath { get; init; } 
+        public string? OutputPath { get; init; } = "/home/void/Desktop/videotest/combat/output2.mp4";
 
         [CommandOption("-m| --auto-matching")]
         [Description("Use auto matching to determine the offset of the audio")]
@@ -34,6 +37,10 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
         [CommandOption("-i| --interactive")]
         [Description("Show prompts")]
         public bool? IsInteractive { get; init; } = true;
+
+        [CommandOption("-d| --audio-delay")]
+        [Description("...")]
+        public int? AudioDelay { get; init; } = null;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -49,9 +56,9 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
         VideoFile? originalVideoFile = null;
         VideoFile additionalVideoFile = null;
 
-        await AnsiConsole.Status()
-            .StartAsync("Analysing files", async context =>
-            {
+        // await AnsiConsole.Status()
+        //     .StartAsync("Analysing files", async context =>
+        //     {
                 additionalTrackMediaInfo = await FFProbe.AnalyseAsync(inputPath);
                 originalTrackMediaInfo = await FFProbe.AnalyseAsync(targetPath);
 
@@ -76,7 +83,7 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
                         Language = Language.LookupCode(x.Language),
                     }).ToList()
                 };
-            });
+            // });
 
         AnsiConsole.Clear();
 
@@ -115,7 +122,16 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
 
         AnsiConsole.Clear();
 
-        int averageOffset = await PerformAutoMatching(targetPath, inputPath);
+        int averageOffset = 0;
+
+        if (settings.AudioDelay == null)
+        {
+            IVideoMatcher matcher = new LegacyVideoMatcher();
+            averageOffset = await matcher.PerformAutoMatchingAsync(targetPath, inputPath);
+        }
+        else
+            averageOffset = (int)settings.AudioDelay;
+
 
         string answer = AnsiConsole.Prompt(new TextPrompt<string>("Do you wish to continue?").AddChoices(["y", "n"]).DefaultValue("y"));
         if (answer == "n")
@@ -129,7 +145,7 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
                     .AddFileInput(inputPath)
                     .OutputToFile(outputPath, overwrite: true, options =>
                     {
-                        options.WithVideoCodec("copy"); // Copy the video stream
+                        options.WithVideoCodec("libx264"); // Copy the video stream
                         options.WithAudioCodec("aac"); // Encode the audio stream
                         options.WithCustomArgument("-map 0:v:0"); // Map video from the first input
 
@@ -193,156 +209,6 @@ public class MergeCommand : AsyncCommand<MergeCommand.Settings>
         AnsiConsole.Console.Input.ReadKey(false);
 
         return 0;
-    }
-
-    private async Task<int> PerformAutoMatching(string mainVideoPath, string videoToMatchPath)
-    {
-        // Get metadata for the input video with audio
-        var additionalTrackMediaInfo = FFProbe.Analyse(videoToMatchPath);
-        var originalTrackMediaInfo = FFProbe.Analyse(mainVideoPath);
-
-        int numberOfProbes = 5;
-        double similarityThreshold = 95;
-        int samplesPerSecond = 10;
-        int searchAreaSeconds = 10;
-
-        List<(double similarity, int offset)> analysedFrames = new();
-
-        await AnsiConsole.Progress()
-            .Columns(new ProgressColumn[]
-            {
-                new SpinnerColumn(),
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new TaskCountColumn()
-            })
-            .StartAsync(async ctx =>
-            {
-                // Define tasks
-                var matchingTask = ctx.AddTask("[green]Probes[/]", true, numberOfProbes);
-                var searchingTask = ctx.AddTask("[gray]Frames[/]", true, 2 * searchAreaSeconds * samplesPerSecond);
-
-
-                for (int i = 0; i < numberOfProbes; i++)
-                {
-                    // Randomly choose a frame within the video duration minus 2 minutes to ensure range
-                    double randomFrameTime = (new Random().NextDouble() * (originalTrackMediaInfo.Duration.TotalMilliseconds - searchAreaSeconds * 1000 * 2)) + searchAreaSeconds * 1000;
-                    TimeSpan frameTime = TimeSpan.FromMilliseconds(randomFrameTime);
-
-                    ulong mainImageHash;
-
-                    try
-                    {
-                        using (var bitmapStream = new MemoryStream())
-                        {
-                            // Use FFmpeg to extract a single frame
-                            var result = FFMpegArguments
-                                .FromFileInput(mainVideoPath, true, options => options
-                                    .Seek(frameTime)) // Seek to the specific frame time
-                                .OutputToPipe(new StreamPipeSink(bitmapStream), options => options
-                                    .WithVideoCodec("bmp") // Use BMP codec to output the frame
-                                    .ForceFormat("image2") // Force image format
-                                    .WithFrameOutputCount(1)) // Output only one frame
-                                .ProcessSynchronously();
-
-                            bitmapStream.Position = 0; // Reset stream position for reading
-
-                        var avgHash = new AverageHash();
-                        mainImageHash = avgHash.Hash(bitmapStream);
-                        bitmapStream.Position = 0;
-                    }
-                    catch (Exception ex)
-                    {
-                        AnsiConsole.MarkupLine($"[red]Error extracting frame: {ex.Message}[/]");
-                        continue;
-                    }
-
-                    analysedFrames.AddRange(SearchFrame(samplesPerSecond, searchAreaSeconds, searchingTask, mainImageHash, videoToMatchPath, frameTime, SearchDirection.Before));
-                    analysedFrames.AddRange(SearchFrame(samplesPerSecond, searchAreaSeconds, searchingTask, mainImageHash, videoToMatchPath, frameTime, SearchDirection.After));
-
-                    searchingTask.Value = 0;
-                    matchingTask.Value++;
-                }
-            });
-
-        var matchedFrames = analysedFrames.OrderByDescending(x => x.similarity).Take(10).ToList();
-        
-        int offset = Convert.ToInt32(matchedFrames.Select(x => x.offset).Average());
-        AnsiConsole.MarkupLine($"Out of [yellow]{numberOfProbes}[/] probes, [green]{analysedFrames.Count}[/] offsets were recorded with a median of [purple]{offset} milliseconds[/] ({string.Join(", ", matchedFrames.Select(x => x.offset))}).");
-        
-        return offset;
-    }
-
-    private List<(double similarity, int offset)> SearchFrame(int samplesPerSecond, int searchAreaSeconds, ProgressTask frameSearchTask, ulong targetFrameHash, string videoToMatchPath, TimeSpan startTime, SearchDirection direction)
-    {
-        List<(double similarity, int offset)> searchedFrames = new();
-
-        ulong compareFrameHash = 0;
-        TimeSpan currentProbeFrame = startTime;
-        int offset = 0;
-        bool matchFound = false;
-
-        for (int i = 0; i < samplesPerSecond * searchAreaSeconds; i++)
-        {
-            currentProbeFrame = startTime.Add(TimeSpan.FromMilliseconds(offset));
-
-            try
-            {
-                using (var searchBitmapStream = new MemoryStream())
-                {
-                    // Use FFmpeg to extract a single frame
-                    var result = FFMpegArguments
-                        .FromFileInput(videoToMatchPath, true, options => options
-                            .Seek(currentProbeFrame)) // Seek to the specific frame time
-                        .OutputToPipe(new StreamPipeSink(searchBitmapStream), options => options
-                            .WithVideoCodec("bmp") // Use BMP codec to output the frame
-                            .ForceFormat("image2") // Force image format
-                            .WithFrameOutputCount(1)) // Output only one frame
-                        .ProcessSynchronously();
-
-                    searchBitmapStream.Position = 0; // Reset stream position for reading
-
-                    var avgHash = new AverageHash();
-                    compareFrameHash = avgHash.Hash(searchBitmapStream);
-                    searchBitmapStream.Position = 0;
-                    //File.WriteAllBytes("/home/void/Desktop/videotest/image2.bmp", ReadFully(searchBitmapStream));
-                }
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]Error extracting frame: {ex.Message}[/]");
-                continue;
-            }
-
-            double similarity = CompareHash.Similarity(targetFrameHash, compareFrameHash);
-            searchedFrames.Add(new(similarity, offset));
-
-            if (similarity > 95)
-                AnsiConsole.MarkupLine($"[gray]{offset}[/] {similarity}");
-
-            frameSearchTask.Value++;
-
-            if (direction == SearchDirection.Before)
-                offset -= (1000 / samplesPerSecond);
-            else
-                offset += (1000 / samplesPerSecond);
-        }
-
-        searchedFrames = searchedFrames.GroupBy(item => item.similarity)
-            .Select(group => (
-                similarity: group.Key,
-                offset: Convert.ToInt32(group.Average(item => item.offset))
-            ))
-            .ToList();
-
-        return searchedFrames;
-    }
-
-
-    private enum SearchDirection
-    {
-        Before,
-        After
     }
 
     public static byte[] ReadFully(Stream input)
